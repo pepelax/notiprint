@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">NotiPrint</string>
+    <string name="notification_listener_label">Печать важных уведомлений</string>
+    <string name="foreground_channel_name">Фоновая работа NotiPrint</string>
+    <string name="foreground_channel_description">Поддерживает приём уведомлений и очередь печати</string>
+    <string name="foreground_notification_title">NotiPrint работает</string>
+    <string name="foreground_notification_text">Ожидает важные уведомления и принтер</string>
+</resources>
