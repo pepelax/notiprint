@@ -19,7 +19,6 @@ object NotificationBitmapRenderer {
     // The printer's 384 dots already sit inside the paper's physical 5 mm side margins.
     // Keep only a tiny safety inset inside the printable area itself.
     private const val HORIZONTAL_MARGIN = 4
-    private const val VERTICAL_MARGIN = 16
     private const val CONTENT_WIDTH = EscPosRasterEncoder.PRINT_WIDTH_DOTS - HORIZONTAL_MARGIN * 2
 
     fun render(job: PrintJob): Bitmap {
@@ -53,7 +52,7 @@ object NotificationBitmapRenderer {
         val bodyLayout = if (body.isBlank()) null else layout(body, bodyPaint)
         val height = max(
             120,
-            VERTICAL_MARGIN * 2 + kindLayout.height + 5 + timestampLayout.height + 14 + titleLayout.height +
+            kindLayout.height + 5 + timestampLayout.height + 14 + titleLayout.height +
                 if (bodyLayout == null) 18 else 18 + bodyLayout.height + 12,
         )
 
@@ -64,7 +63,10 @@ object NotificationBitmapRenderer {
         ).also { bitmap ->
             val canvas = Canvas(bitmap)
             canvas.drawColor(Color.WHITE)
-            var top = VERTICAL_MARGIN.toFloat()
+            // GS v 0 already moves the paper as each raster row is printed.  Do not
+            // reserve an empty top edge: the previous receipt's final feed is the
+            // only gap between adjacent notifications.
+            var top = 0f
 
             top = canvas.drawLayout(kindLayout, top)
             top += 5

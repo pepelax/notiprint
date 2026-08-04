@@ -10,6 +10,7 @@ import ru.notiprint.data.PrintJob
 import ru.notiprint.printer.BluetoothPermissions
 import ru.notiprint.printer.BluetoothPrinterClient
 import ru.notiprint.printer.NotificationBitmapRenderer
+import ru.notiprint.printer.PrinterConnectionGate
 import ru.notiprint.settings.AppPreferences
 import ru.notiprint.settings.NightMode
 
@@ -31,19 +32,21 @@ class PrintWorker(appContext: Context, workerParams: WorkerParameters) : Corouti
 
         var currentJob: PrintJob? = null
         try {
-            BluetoothPrinterClient(applicationContext).use { printer ->
-                printer.connect(settings.printerAddress)
-                jobs.forEach { job ->
-                    currentJob = job
-                    dao.markPrinting(job.id)
-                    val bitmap = NotificationBitmapRenderer.render(job)
-                    try {
-                        printer.print(bitmap)
-                    } finally {
-                        bitmap.recycle()
+            PrinterConnectionGate.withLock {
+                BluetoothPrinterClient(applicationContext).use { printer ->
+                    printer.connect(settings.printerAddress)
+                    jobs.forEach { job ->
+                        currentJob = job
+                        dao.markPrinting(job.id)
+                        val bitmap = NotificationBitmapRenderer.render(job)
+                        try {
+                            printer.print(bitmap)
+                        } finally {
+                            bitmap.recycle()
+                        }
+                        dao.markPrinted(job.id)
+                        currentJob = null
                     }
-                    dao.markPrinted(job.id)
-                    currentJob = null
                 }
             }
             Result.success()

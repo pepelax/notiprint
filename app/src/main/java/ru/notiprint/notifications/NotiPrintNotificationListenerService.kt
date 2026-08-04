@@ -10,7 +10,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import ru.notiprint.data.AppDatabase
+import ru.notiprint.data.NotificationKind
 import ru.notiprint.data.PrintJob
+import ru.notiprint.data.SenderIdentifier
 import ru.notiprint.settings.AppPreferences
 import ru.notiprint.work.PrintScheduler
 
@@ -62,14 +64,37 @@ class NotiPrintNotificationListenerService : NotificationListenerService() {
             return
         }
 
-        val insertResult = AppDatabase.get(applicationContext).printJobDao().insert(
+        val database = AppDatabase.get(applicationContext)
+        val missedCallDetails = if (kind == NotificationKind.MISSED_CALL) {
+            MissedCallDetailsResolver.latest(applicationContext)
+        } else {
+            null
+        }
+        if (
+            missedCallDetails?.number
+                ?.let(SenderIdentifier::normalize)
+                ?.let { database.blockedSenderDao().isBlocked(it) } == true
+        ) {
+            return
+        }
+        // This only matters on devices where Android does not grant the direct
+        // SMS receiver permission and NotiPrint falls back to SMS notifications.
+        if (
+            kind == NotificationKind.SMS &&
+                SenderIdentifier.normalize(title)
+                    ?.let { database.blockedSenderDao().isBlocked(it) } == true
+        ) {
+            return
+        }
+
+        val insertResult = database.printJobDao().insert(
             PrintJob(
                 // Several Android apps keep one stable notification key and merely update its content.
                 // postTime changes for a new missed call/message but stays stable for repeated callbacks.
                 notificationKey = "${sbn.key}:${sbn.postTime}",
                 kind = kind,
-                title = if (kind == ru.notiprint.data.NotificationKind.MISSED_CALL) {
-                    missedCallTitle(title)
+                title = if (kind == NotificationKind.MISSED_CALL) {
+                    missedCallTitle(title, missedCallDetails)
                 } else {
                     title
                 },
@@ -94,8 +119,7 @@ class NotiPrintNotificationListenerService : NotificationListenerService() {
             ?.trim()
             .orEmpty()
 
-    private fun missedCallTitle(notificationTitle: String): String {
-        val details = MissedCallDetailsResolver.latest(applicationContext)
+    private fun missedCallTitle(notificationTitle: String, details: MissedCallDetails?): String {
         val name = details?.name ?: notificationTitle.trim()
         val number = details?.number
         return when {

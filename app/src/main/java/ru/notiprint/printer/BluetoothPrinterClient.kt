@@ -42,12 +42,22 @@ class BluetoothPrinterClient(private val context: Context) : AutoCloseable {
     }
 
     @Throws(IOException::class)
-    fun print(bitmap: Bitmap) {
+    fun print(bitmap: Bitmap, feedLines: Int = DEFAULT_FEED_LINES) {
+        require(feedLines in 0..255) { "Feed line count must fit into one byte" }
         val stream = output ?: throw IOException("Printer is not connected")
-        EscPosRasterEncoder.encode(bitmap).forEach(stream::write)
-        stream.write(ESC_FEED_4_LINES)
+        printRaster(bitmap)
+        // Raster data advances the paper while it is printed.  Feed only after the
+        // receipt, so the next notification begins immediately below this gap.
+        stream.write(byteArrayOf(ESC, FEED_LINES, feedLines.toByte()))
         // One flush per whole receipt prevents the gaps produced by line-by-line printing.
         stream.flush()
+    }
+
+    /** Sends an image without advancing empty paper afterwards. */
+    @Throws(IOException::class)
+    fun printRaster(bitmap: Bitmap) {
+        val stream = output ?: throw IOException("Printer is not connected")
+        EscPosRasterEncoder.encode(bitmap).forEach(stream::write)
     }
 
     override fun close() {
@@ -68,6 +78,8 @@ class BluetoothPrinterClient(private val context: Context) : AutoCloseable {
     private companion object {
         val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
         val ESC_INITIALIZE = byteArrayOf(0x1B, 0x40)
-        val ESC_FEED_4_LINES = byteArrayOf(0x1B, 0x64, 0x04)
+        const val DEFAULT_FEED_LINES = 4
+        const val ESC: Byte = 0x1B
+        const val FEED_LINES: Byte = 0x64
     }
 }

@@ -11,7 +11,8 @@ import android.graphics.Typeface
  * so it helps distinguish a printer/head issue from thin antialiased text strokes.
  */
 object PrinterDiagnosticBitmapRenderer {
-    private const val LEFT = 20
+    // Match notification receipts: the printer itself already has paper-side margins.
+    private const val LEFT = 4
     private const val RIGHT = EscPosRasterEncoder.PRINT_WIDTH_DOTS - LEFT
     private const val WIDTH = RIGHT - LEFT
 

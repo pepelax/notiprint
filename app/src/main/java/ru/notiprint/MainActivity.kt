@@ -4,11 +4,13 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.TimePickerDialog
 import android.bluetooth.BluetoothAdapter
+import android.content.ContentUris
 import android.content.ComponentName
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.ContactsContract
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -32,6 +34,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -57,13 +60,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import ru.notiprint.data.AppDatabase
+import ru.notiprint.data.BlockedSender
 import ru.notiprint.data.NotificationKind
 import ru.notiprint.data.PrintJob
 import ru.notiprint.data.PrintStatus
+import ru.notiprint.data.SenderIdentifier
 import ru.notiprint.notifications.NotificationListenerController
 import ru.notiprint.printer.BluetoothPermissions
 import ru.notiprint.printer.BluetoothPrinterClient
 import ru.notiprint.printer.NotificationBitmapRenderer
+import ru.notiprint.printer.PrinterConnectionGate
 import ru.notiprint.printer.PrinterDiagnosticBitmapRenderer
 import ru.notiprint.settings.AppPreferences
 import ru.notiprint.settings.AppSettings
@@ -107,6 +113,12 @@ class MainActivity : ComponentActivity() {
         permissionRevision++
     }
 
+    private val blockedContactPicker = registerForActivityResult(
+        ActivityResultContracts.PickContact(),
+    ) { contactUri ->
+        contactUri?.let(::addBlockedContact)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         preferences = AppPreferences(applicationContext)
@@ -126,6 +138,9 @@ class MainActivity : ComponentActivity() {
                     requestBluetoothPermission = ::requestBluetoothPermission,
                     openNotificationAccess = ::openNotificationAccess,
                     openAutoStartSettings = ::openAutoStartSettings,
+                    pickBlockedContact = { blockedContactPicker.launch(null) },
+                    addBlockedSender = ::addBlockedSender,
+                    removeBlockedSender = ::removeBlockedSender,
                     showTimePicker = ::showTimePicker,
                     printTest = ::printTest,
                 )
@@ -207,6 +222,91 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    private fun addBlockedSender(rawValue: String) {
+        val label = rawValue.trim()
+        val normalized = SenderIdentifier.normalize(label)
+        if (normalized == null) {
+            toast("Введите номер или имя отправителя")
+            return
+        }
+
+        lifecycleScope.launch {
+            val added = withContext(Dispatchers.IO) {
+                AppDatabase.get(applicationContext).blockedSenderDao().insertAll(
+                    listOf(BlockedSender(normalized = normalized, label = label)),
+                ).single() != -1L
+            }
+            toast(if (added) "Добавлено в чёрный список" else "Такая запись уже есть в списке")
+        }
+    }
+
+    private fun addBlockedContact(contactUri: Uri) {
+        lifecycleScope.launch {
+            val contact = withContext(Dispatchers.IO) {
+                readContactWithPhoneNumbers(contactUri)
+            }
+            if (contact == null) {
+                toast("У выбранного контакта нет доступных телефонных номеров")
+                return@launch
+            }
+
+            val entries = contact.phoneNumbers.mapNotNull { phoneNumber ->
+                SenderIdentifier.normalize(phoneNumber)?.let { normalized ->
+                    BlockedSender(
+                        normalized = normalized,
+                        label = "${contact.name} · $phoneNumber",
+                    )
+                }
+            }.distinctBy(BlockedSender::normalized)
+            val addedCount = withContext(Dispatchers.IO) {
+                AppDatabase.get(applicationContext).blockedSenderDao().insertAll(entries).count { it != -1L }
+            }
+            toast(
+                when {
+                    addedCount == 0 -> "Все номера контакта уже есть в чёрном списке"
+                    addedCount == 1 -> "Один номер добавлен в чёрный список"
+                    else -> "$addedCount номера добавлены в чёрный список"
+                },
+            )
+        }
+    }
+
+    private fun removeBlockedSender(entry: BlockedSender) {
+        lifecycleScope.launch {
+            withContext(Dispatchers.IO) {
+                AppDatabase.get(applicationContext).blockedSenderDao().delete(entry)
+            }
+        }
+    }
+
+    private fun readContactWithPhoneNumbers(contactUri: Uri): ContactWithPhoneNumbers? = runCatching {
+        val resolver = contentResolver
+        val contactId = ContentUris.parseId(contactUri)
+        val name = resolver.query(
+            contactUri,
+            arrayOf(ContactsContract.Contacts.DISPLAY_NAME),
+            null,
+            null,
+            null,
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0)?.trim().orEmpty() else ""
+        }.orEmpty().ifBlank { "Контакт" }
+        val numbers = resolver.query(
+            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+            arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER),
+            "${ContactsContract.CommonDataKinds.Phone.CONTACT_ID} = ?",
+            arrayOf(contactId.toString()),
+            null,
+        )?.use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    cursor.getString(0)?.trim()?.takeIf(String::isNotBlank)?.let(::add)
+                }
+            }
+        }.orEmpty()
+        ContactWithPhoneNumbers(name, numbers)
+    }.getOrNull()?.takeIf { it.phoneNumbers.isNotEmpty() }
+
     private fun showTimePicker(currentMinutes: Int, onTimeSelected: (Int) -> Unit) {
         TimePickerDialog(
             this,
@@ -243,10 +343,19 @@ class MainActivity : ComponentActivity() {
                     val bitmap = NotificationBitmapRenderer.render(job)
                     val diagnosticBitmap = PrinterDiagnosticBitmapRenderer.render()
                     try {
-                        BluetoothPrinterClient(applicationContext).use { printer ->
-                            printer.connect(address)
-                            printer.print(bitmap)
-                            printer.print(diagnosticBitmap)
+                        PrinterConnectionGate.withLock {
+                            BluetoothPrinterClient(applicationContext).use { printer ->
+                                printer.connect(address)
+                                // Keep both parts on one receipt, but use a fresh
+                                // GS v 0 command at the boundary. Some compact
+                                // printers recover from this more reliably than
+                                // from one very tall raster image.
+                                printer.printRaster(bitmap)
+                                printer.print(diagnosticBitmap, feedLines = 8)
+                                // Let the printer consume its long test-page
+                                // buffer before its SPP connection is released.
+                                Thread.sleep(TEST_PRINTER_DRAIN_DELAY_MS)
+                            }
                         }
                     } finally {
                         bitmap.recycle()
@@ -264,9 +373,19 @@ class MainActivity : ComponentActivity() {
     private fun toast(message: String) {
         Toast.makeText(this, message, Toast.LENGTH_LONG).show()
     }
+
+
+    private companion object {
+        const val TEST_PRINTER_DRAIN_DELAY_MS = 3_000L
+    }
 }
 
 private data class PairedPrinter(val name: String, val address: String)
+
+private data class ContactWithPhoneNumbers(
+    val name: String,
+    val phoneNumbers: List<String>,
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -276,14 +395,22 @@ private fun NotiPrintScreen(
     requestBluetoothPermission: () -> Unit,
     openNotificationAccess: () -> Unit,
     openAutoStartSettings: () -> Unit,
+    pickBlockedContact: () -> Unit,
+    addBlockedSender: (String) -> Unit,
+    removeBlockedSender: (BlockedSender) -> Unit,
     showTimePicker: (Int, (Int) -> Unit) -> Unit,
     printTest: () -> Unit,
 ) {
     val context = LocalContext.current
-    val jobs by AppDatabase.get(context).printJobDao().observeRecent(20)
+    val database = AppDatabase.get(context)
+    val jobs by database.printJobDao().observeRecent(20)
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+    val blockedSenders by database.blockedSenderDao().observeAll()
         .collectAsStateWithLifecycle(initialValue = emptyList())
     var settings by remember { mutableStateOf(preferences.snapshot()) }
     var showPrinterDialog by remember { mutableStateOf(false) }
+    var showManualBlockedSenderDialog by remember { mutableStateOf(false) }
+    var manualBlockedSender by remember { mutableStateOf("") }
     var pairedPrinters by remember { mutableStateOf(emptyList<PairedPrinter>()) }
     val bluetoothAllowed = remember(permissionRevision) {
         BluetoothPermissions.hasConnectPermission(context)
@@ -328,18 +455,25 @@ private fun NotiPrintScreen(
                         },
                         style = MaterialTheme.typography.bodySmall,
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = {
                             if (!bluetoothAllowed) {
                                 requestBluetoothPermission()
                             } else {
                                 pairedPrinters = getPairedPrinters(context)
                                 showPrinterDialog = true
                             }
-                        }) {
+                            },
+                        ) {
                             Text("Выбрать принтер")
                         }
-                        OutlinedButton(onClick = printTest) {
+                        OutlinedButton(
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = !settings.printerAddress.isNullOrBlank(),
+                            onClick = printTest,
+                        ) {
                             Text("Тестовая печать")
                         }
                     }
@@ -353,14 +487,20 @@ private fun NotiPrintScreen(
                         if (notificationAccessAllowed) "Доступ к уведомлениям выдан"
                         else "Нужно разрешить чтение уведомлений",
                     )
-                    OutlinedButton(onClick = openNotificationAccess) {
+                    OutlinedButton(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = openNotificationAccess,
+                    ) {
                         Text(if (notificationAccessAllowed) "Открыть настройки доступа" else "Разрешить доступ")
                     }
-                    OutlinedButton(onClick = openAutoStartSettings) {
+                    OutlinedButton(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = openAutoStartSettings,
+                    ) {
                         Text("Настроить автозапуск")
                     }
                     Text(
-                        "Для Huawei включите автозапуск, косвенный запуск и работу в фоновом режиме.",
+                        "Разрешите автозапуск и работу в фоновом режиме в настройках телефона.",
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -389,6 +529,56 @@ private fun NotiPrintScreen(
                     SettingSwitch("Уведомления календаря", settings.calendarEnabled) {
                         preferences.setCalendarEnabled(it)
                         refreshSettings()
+                    }
+                }
+            }
+
+            SectionTitle("Чёрный список")
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Не печатать СМС и пропущенные звонки от указанных номеров.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Button(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = pickBlockedContact,
+                    ) {
+                        Text("Выбрать контакт")
+                    }
+                    OutlinedButton(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { showManualBlockedSenderDialog = true },
+                    ) {
+                        Text("Добавить номер вручную")
+                    }
+                    if (blockedSenders.isEmpty()) {
+                        Text(
+                            "Список пуст.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    } else {
+                        HorizontalDivider()
+                        blockedSenders.forEachIndexed { index, entry ->
+                            if (index > 0) HorizontalDivider()
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    val contactName = entry.label.substringBefore(" · ", missingDelimiterValue = "")
+                                    if (contactName.isNotEmpty()) {
+                                        Text(contactName, style = MaterialTheme.typography.bodyMedium)
+                                        Text(entry.normalized, style = MaterialTheme.typography.labelSmall)
+                                    } else {
+                                        Text(entry.label, style = MaterialTheme.typography.bodyMedium)
+                                    }
+                                }
+                                TextButton(onClick = { removeBlockedSender(entry) }) {
+                                    Text("Удалить")
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -462,6 +652,39 @@ private fun NotiPrintScreen(
         }
     }
 
+    if (showManualBlockedSenderDialog) {
+        AlertDialog(
+            onDismissRequest = { showManualBlockedSenderDialog = false },
+            title = { Text("Добавить в чёрный список") },
+            text = {
+                OutlinedTextField(
+                    modifier = Modifier.fillMaxWidth(),
+                    value = manualBlockedSender,
+                    onValueChange = { manualBlockedSender = it },
+                    label = { Text("Номер или имя отправителя") },
+                    singleLine = true,
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = manualBlockedSender.isNotBlank(),
+                    onClick = {
+                        addBlockedSender(manualBlockedSender)
+                        manualBlockedSender = ""
+                        showManualBlockedSenderDialog = false
+                    },
+                ) {
+                    Text("Добавить")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showManualBlockedSenderDialog = false }) {
+                    Text("Отмена")
+                }
+            },
+        )
+    }
+
     if (showPrinterDialog) {
         AlertDialog(
             onDismissRequest = { showPrinterDialog = false },
@@ -511,6 +734,8 @@ private fun StatusCard(
             StatusLine("Bluetooth", if (bluetoothAllowed) "разрешён" else "нужно разрешение")
             StatusLine("Уведомления", if (notificationAccessAllowed) "разрешены" else "нужен доступ")
             StatusLine("Очередь", if (waitingCount == 0) "пуста" else "$waitingCount ожидают печати")
+            StatusLine("Версия", BuildConfig.VERSION_NAME)
+            StatusLine("Сборка", BuildConfig.BUILD_DATE)
         }
     }
 }

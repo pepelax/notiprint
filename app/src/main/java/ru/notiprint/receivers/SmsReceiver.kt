@@ -13,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import ru.notiprint.data.AppDatabase
+import ru.notiprint.data.SenderIdentifier
 import ru.notiprint.data.NotificationKind
 import ru.notiprint.data.PrintJob
 import ru.notiprint.settings.AppPreferences
@@ -35,12 +36,28 @@ class SmsReceiver : BroadcastReceiver() {
                 val sender = messages.first().originatingAddress?.trim().orEmpty().ifBlank { "Неизвестный отправитель" }
                 val text = messages.joinToString(separator = "") { it.messageBody.orEmpty() }.trim()
                 if (text.isBlank()) return@launch
+                val database = AppDatabase.get(context)
+                if (
+                    SenderIdentifier.normalize(sender)
+                        ?.let { database.blockedSenderDao().isBlocked(it) } == true
+                ) {
+                    return@launch
+                }
                 val contactName = findContactName(context, sender)
-                if (settings.ignoreSmsFromUnknownNumbers && contactName == null) return@launch
+                // Sender IDs such as "МЧС" or "SBERBANK" are not phone numbers.
+                // They must not be suppressed by an option that explicitly applies
+                // to unfamiliar *numbers*.
+                if (
+                        settings.ignoreSmsFromUnknownNumbers &&
+                        contactName == null &&
+                        SenderIdentifier.isNumericAddress(sender)
+                ) {
+                    return@launch
+                }
 
                 val receivedAt = messages.first().timestampMillis.takeIf { it > 0 } ?: System.currentTimeMillis()
                 val sourceKey = "sms:$sender:$receivedAt:${text.hashCode()}"
-                val inserted = AppDatabase.get(context).printJobDao().insert(
+                val inserted = database.printJobDao().insert(
                     PrintJob(
                         notificationKey = sourceKey,
                         kind = NotificationKind.SMS,
@@ -80,4 +97,5 @@ class SmsReceiver : BroadcastReceiver() {
             if (cursor.moveToFirst()) cursor.getString(0)?.trim()?.ifBlank { null } else null
         }
     }
+
 }
