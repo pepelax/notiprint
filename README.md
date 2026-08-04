@@ -1,32 +1,67 @@
 # NotiPrint
 
-Локальное Android-приложение, которое сохраняет важные уведомления и печатает их на 58-мм Bluetooth SPP-принтере через ESC/POS.
+[Русская версия](README.RU.md)
 
-Текущая первая версия умеет:
+NotiPrint is a local Android app that stores important phone events and prints them on a Bluetooth Classic SPP thermal printer using ESC/POS raster commands.
 
-- принимать СМС, уведомления о пропущенных звонках и календаря через системный доступ к уведомлениям;
-- сохранять каждое выбранное уведомление в локальной очереди Room до передачи принтеру;
-- автоматически повторять печать, когда Bluetooth снова включён или устройство подключается;
-- буферизировать уведомления в ночном интервале (по умолчанию 22:00–08:00);
-- рендерить кириллицу в 384-точечный чёрно-белый растр и посылать его по Bluetooth Classic SPP как ESC/POS `GS v 0`;
-- выбирать ранее сопряжённый принтер и отправлять тестовую печать.
+It is designed for a simple, large-text workflow: a family member does not need to open the app to receive a paper copy of an important event.
 
-## Первый запуск
+## Features
 
-1. Откройте эту папку в Android Studio.
-2. В **Settings → Build, Execution, Deployment → Build Tools → Gradle** выберите Gradle JDK `C:\Users\M\.jdks\jbr-21.0.11`.
-   Встроенная в установленную Android Studio Java 25 пока несовместима с используемой версией Gradle; JBR 21 уже установлен и проверен сборкой.
-3. На Samsung A33 включите **Параметры разработчика → Отладка по USB** и подтвердите доверие этому компьютеру после подключения кабелем.
-4. В Android Studio выберите телефон в списке устройств и нажмите **Run**.
-5. В приложении разрешите доступ Bluetooth, выберите уже сопряжённый принтер и нажмите «Тестовая печать».
-6. Нажмите «Разрешить доступ» в блоке уведомлений и включите для NotiPrint системный доступ к уведомлениям.
+- Prints incoming SMS, missed calls, and calendar notifications.
+- Saves every accepted event in a local Room queue before printing, then retries when the printer or Bluetooth connection becomes available.
+- Supports a configurable night interval: events are buffered overnight and printed in the morning.
+- Renders all content as a 384-dot monochrome bitmap, so Cyrillic text does not depend on the printer code page.
+- Works with paired 58 mm Bluetooth SPP / ESC-POS printers, including 384-dot models such as the MUNBYN IMP006.
+- Runs as a foreground service and requests a notification-listener rebind after app startup or device reboot.
+- Can ignore SMS from unknown numeric senders while still allowing alphabetic Sender IDs such as `МЧС` or `MCHS`.
+- Includes a local blacklist for SMS and missed calls. Add all numbers from a contact or enter a number/Sender ID manually.
+- Provides a diagnostic test page for checking print quality and paper coverage.
 
-После этого приложение начинает сохранять подходящие новые уведомления. Если принтер выключен, записи останутся в очереди и будут повторно отправлены после возвращения Bluetooth-соединения.
+## Requirements
 
-## Сборка из терминала
+- Android Studio with the Android SDK installed.
+- A Gradle JDK compatible with the project, preferably JDK 17 or JDK 21.
+- An Android phone running Android 8.0 (API 26) or later.
+- A paired Bluetooth Classic SPP printer that supports ESC/POS raster printing (`GS v 0`).
+
+## Build
+
+Open the project root in Android Studio and select a compatible Gradle JDK in its Gradle settings if needed.
+
+From the project root, build a debug APK with one of these commands:
 
 ```powershell
-& 'C:\Users\M\.jdks\jbr-21.0.11\bin\java.exe' '-Dorg.gradle.appname=gradlew' -classpath 'gradle\wrapper\gradle-wrapper.jar' org.gradle.wrapper.GradleWrapperMain assembleDebug --offline --no-daemon
+.\gradlew.bat assembleDebug
 ```
 
-Готовый файл: `app\build\outputs\apk\debug\app-debug.apk`.
+```bash
+./gradlew assembleDebug
+```
+
+After a successful build, the APK is available at:
+
+```text
+app/build/outputs/apk/debug/app-debug.apk
+```
+
+Use `--offline` only when the required Gradle dependencies have already been cached locally.
+
+## Install and first run
+
+For development, connect a phone with USB debugging enabled, select it in Android Studio, and press **Run**.
+
+To install the APK on a regular phone, copy `app-debug.apk` to the phone, open it with the file manager, and allow installation from that source when Android asks. USB debugging is not required for this method.
+
+On first launch:
+
+1. Grant Bluetooth/Nearby devices access and choose an already paired printer.
+2. Run **Test print** to confirm the connection and paper quality.
+3. Grant access to notifications, SMS, contacts, and call history as requested.
+4. In the phone settings, allow NotiPrint to start automatically and run in the background. The names of these settings differ between manufacturers.
+
+## Printer notes
+
+The app sends complete raster jobs over one SPP connection and flushes only after each receipt. This avoids the visible pauses often caused by line-by-line Bluetooth printing.
+
+The MUNBYN IMP006 specification recommends 58 mm thermal paper with a thickness of 0.06–0.08 mm. Paper thermal sensitivity and the printer battery level can noticeably affect coverage, especially in dense black areas.
