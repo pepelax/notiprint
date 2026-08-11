@@ -6,12 +6,16 @@ import kotlin.math.min
 /** Encodes a 384-dot bitmap using ESC/POS GS v 0 raster commands. */
 object EscPosRasterEncoder {
     const val PRINT_WIDTH_DOTS = 384
+    const val DEFAULT_BAND_HEIGHT = 128
     private const val BYTES_PER_ROW = PRINT_WIDTH_DOTS / 8
-    private const val BAND_HEIGHT = 128
+    private const val MAX_COMMAND_HEIGHT = 0xFFFF
 
-    fun encode(bitmap: Bitmap): List<ByteArray> {
+    fun encode(bitmap: Bitmap, bandHeight: Int = DEFAULT_BAND_HEIGHT): List<ByteArray> {
         require(bitmap.width == PRINT_WIDTH_DOTS) {
             "Expected a ${PRINT_WIDTH_DOTS}px-wide bitmap, got ${bitmap.width}px"
+        }
+        require(bandHeight in 1..MAX_COMMAND_HEIGHT) {
+            "Raster command height must be between 1 and $MAX_COMMAND_HEIGHT rows"
         }
 
         val pixels = IntArray(bitmap.width * bitmap.height)
@@ -20,7 +24,7 @@ object EscPosRasterEncoder {
         return buildList {
             var bandTop = 0
             while (bandTop < bitmap.height) {
-                val height = min(BAND_HEIGHT, bitmap.height - bandTop)
+                val height = min(bandHeight, bitmap.height - bandTop)
                 val command = ByteArray(8 + BYTES_PER_ROW * height)
                 command[0] = 0x1D
                 command[1] = 0x76

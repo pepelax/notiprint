@@ -5,6 +5,7 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothSocket
 import android.content.Context
 import android.graphics.Bitmap
+import android.os.SystemClock
 import java.io.IOException
 import java.io.OutputStream
 import java.util.UUID
@@ -42,22 +43,56 @@ class BluetoothPrinterClient(private val context: Context) : AutoCloseable {
     }
 
     @Throws(IOException::class)
-    fun print(bitmap: Bitmap, feedLines: Int = DEFAULT_FEED_LINES) {
+    fun print(
+        bitmap: Bitmap,
+        feedLines: Int = DEFAULT_FEED_LINES,
+        rasterBandHeight: Int = EscPosRasterEncoder.DEFAULT_BAND_HEIGHT,
+    ) {
         require(feedLines in 0..255) { "Feed line count must fit into one byte" }
-        val stream = output ?: throw IOException("Printer is not connected")
-        printRaster(bitmap)
-        // Raster data advances the paper while it is printed.  Feed only after the
-        // receipt, so the next notification begins immediately below this gap.
-        stream.write(byteArrayOf(ESC, FEED_LINES, feedLines.toByte()))
-        // One flush per whole receipt prevents the gaps produced by line-by-line printing.
-        stream.flush()
+        sendBitmap(
+            bitmap = bitmap,
+            rasterBandHeight = rasterBandHeight,
+            trailingCommand = byteArrayOf(ESC, FEED_LINES, feedLines.toByte()),
+        )
     }
 
     /** Sends an image without advancing empty paper afterwards. */
     @Throws(IOException::class)
-    fun printRaster(bitmap: Bitmap) {
+    fun printRaster(
+        bitmap: Bitmap,
+        rasterBandHeight: Int = EscPosRasterEncoder.DEFAULT_BAND_HEIGHT,
+    ) {
+        sendBitmap(bitmap, rasterBandHeight, trailingCommand = null)
+    }
+
+    @Throws(IOException::class)
+    private fun sendBitmap(
+        bitmap: Bitmap,
+        rasterBandHeight: Int,
+        trailingCommand: ByteArray?,
+    ) {
         val stream = output ?: throw IOException("Printer is not connected")
-        EscPosRasterEncoder.encode(bitmap).forEach(stream::write)
+        val commands = EscPosRasterEncoder.encode(bitmap, rasterBandHeight)
+        val startedAt = SystemClock.elapsedRealtime()
+
+        // Keep the raster stream continuous: pauses inside it caused visible
+        // banding on the IMP006. Wait only after the whole image was handed off.
+        commands.forEach(stream::write)
+        trailingCommand?.let(stream::write)
+        stream.flush()
+
+        val elapsedSendMillis = SystemClock.elapsedRealtime() - startedAt
+        waitForPrinter(PrinterDrainTiming.delayMillis(bitmap.height, elapsedSendMillis))
+    }
+
+    @Throws(IOException::class)
+    private fun waitForPrinter(delayMillis: Long) {
+        try {
+            Thread.sleep(delayMillis)
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw IOException("Printing was interrupted", error)
+        }
     }
 
     override fun close() {

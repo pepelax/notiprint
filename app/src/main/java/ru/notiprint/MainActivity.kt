@@ -346,15 +346,14 @@ class MainActivity : ComponentActivity() {
                         PrinterConnectionGate.withLock {
                             BluetoothPrinterClient(applicationContext).use { printer ->
                                 printer.connect(address)
-                                // Keep both parts on one receipt, but use a fresh
-                                // GS v 0 command at the boundary. Some compact
-                                // printers recover from this more reliably than
-                                // from one very tall raster image.
-                                printer.printRaster(bitmap)
-                                printer.print(diagnosticBitmap, feedLines = 8)
-                                // Let the printer consume its long test-page
-                                // buffer before its SPP connection is released.
-                                Thread.sleep(TEST_PRINTER_DRAIN_DELAY_MS)
+                                // Diagnostic experiment: only the manual test uses
+                                // 256-row bands. Real notifications stay at 128 rows.
+                                printer.printRaster(bitmap, rasterBandHeight = TEST_RASTER_BAND_HEIGHT)
+                                printer.print(
+                                    diagnosticBitmap,
+                                    feedLines = 8,
+                                    rasterBandHeight = TEST_RASTER_BAND_HEIGHT,
+                                )
                             }
                         }
                     } finally {
@@ -376,7 +375,7 @@ class MainActivity : ComponentActivity() {
 
 
     private companion object {
-        const val TEST_PRINTER_DRAIN_DELAY_MS = 3_000L
+        const val TEST_RASTER_BAND_HEIGHT = 256
     }
 }
 
