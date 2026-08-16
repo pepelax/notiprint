@@ -24,7 +24,12 @@ class BluetoothPrinterClient(private val context: Context) : AutoCloseable {
         val adapter = BluetoothAdapter.getDefaultAdapter() ?: throw IOException("Bluetooth is not available")
         if (!adapter.isEnabled) throw IOException("Bluetooth is disabled")
 
-        adapter.cancelDiscovery()
+        // cancelDiscovery() requires BLUETOOTH_SCAN on Android 12+, even
+        // though connecting to an already paired device only needs
+        // BLUETOOTH_CONNECT. Do not make printing depend on scan access.
+        if (BluetoothPermissions.canCancelDiscovery(context)) {
+            adapter.cancelDiscovery()
+        }
         val device = adapter.getRemoteDevice(address)
         val newSocket = device.createRfcommSocketToServiceRecord(SPP_UUID)
         try {

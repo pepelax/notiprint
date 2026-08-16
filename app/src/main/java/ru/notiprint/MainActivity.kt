@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.TimePickerDialog
 import android.bluetooth.BluetoothAdapter
+import android.content.ActivityNotFoundException
 import android.content.ContentUris
 import android.content.ComponentName
 import android.content.Intent
@@ -217,9 +218,11 @@ class MainActivity : ComponentActivity() {
             Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
             Uri.fromParts("package", packageName, null),
         )
-        startActivity(
-            if (huaweiAppLaunch.resolveActivity(packageManager) != null) huaweiAppLaunch else applicationDetails,
-        )
+        try {
+            startActivity(huaweiAppLaunch)
+        } catch (_: ActivityNotFoundException) {
+            startActivity(applicationDetails)
+        }
     }
 
     private fun addBlockedSender(rawValue: String) {
