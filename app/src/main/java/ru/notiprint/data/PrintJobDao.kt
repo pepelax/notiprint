@@ -11,6 +11,29 @@ interface PrintJobDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(job: PrintJob): Long
 
+    @Query(
+        """
+        SELECT EXISTS(
+            SELECT 1
+            FROM print_jobs
+            WHERE kind = 'CALENDAR'
+              AND packageName = :packageName
+              AND title = :title
+              AND message = :message
+              AND substr(notificationKey, 1, length(:stableNotificationKey) + 1) = :stableNotificationKey || ':'
+              AND postedAt BETWEEN :postedAfter AND :postedBefore
+        )
+        """,
+    )
+    suspend fun hasRecentCalendarDuplicate(
+        stableNotificationKey: String,
+        packageName: String,
+        title: String,
+        message: String,
+        postedAfter: Long,
+        postedBefore: Long,
+    ): Boolean
+
     @Query("SELECT * FROM print_jobs ORDER BY receivedAt DESC LIMIT :limit")
     fun observeRecent(limit: Int): Flow<List<PrintJob>>
 

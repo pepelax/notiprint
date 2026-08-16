@@ -9,6 +9,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import ru.notiprint.data.AppDatabase
 import ru.notiprint.data.NotificationKind
 import ru.notiprint.data.PrintJob
@@ -18,6 +20,7 @@ import ru.notiprint.work.PrintScheduler
 
 class NotiPrintNotificationListenerService : NotificationListenerService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val saveMutex = Mutex()
 
     override fun onListenerConnected() {
         super.onListenerConnected()
@@ -44,7 +47,11 @@ class NotiPrintNotificationListenerService : NotificationListenerService() {
 
     private fun Notification.isGroupSummary(): Boolean = flags and Notification.FLAG_GROUP_SUMMARY != 0
 
-    private suspend fun saveIfRelevant(sbn: StatusBarNotification) {
+    private suspend fun saveIfRelevant(sbn: StatusBarNotification) = saveMutex.withLock {
+        saveIfRelevantLocked(sbn)
+    }
+
+    private suspend fun saveIfRelevantLocked(sbn: StatusBarNotification) {
         if (sbn.packageName == packageName || sbn.notification.isGroupSummary()) return
 
         val settings = AppPreferences(applicationContext).snapshot()
@@ -87,17 +94,33 @@ class NotiPrintNotificationListenerService : NotificationListenerService() {
             return
         }
 
+        val displayTitle = if (kind == NotificationKind.MISSED_CALL) {
+            missedCallTitle(title, missedCallDetails)
+        } else {
+            title
+        }
+        if (
+            kind == NotificationKind.CALENDAR &&
+                database.printJobDao().hasRecentCalendarDuplicate(
+                    stableNotificationKey = sbn.key,
+                    packageName = sbn.packageName,
+                    title = displayTitle,
+                    message = message,
+                    postedAfter = sbn.postTime - CALENDAR_DUPLICATE_WINDOW_MS,
+                    postedBefore = sbn.postTime + CALENDAR_DUPLICATE_WINDOW_MS,
+                )
+        ) {
+            Log.d(TAG, "Ignored duplicate calendar notification: key=${sbn.key}")
+            return
+        }
+
         val insertResult = database.printJobDao().insert(
             PrintJob(
                 // Several Android apps keep one stable notification key and merely update its content.
                 // postTime changes for a new missed call/message but stays stable for repeated callbacks.
                 notificationKey = "${sbn.key}:${sbn.postTime}",
                 kind = kind,
-                title = if (kind == NotificationKind.MISSED_CALL) {
-                    missedCallTitle(title, missedCallDetails)
-                } else {
-                    title
-                },
+                title = displayTitle,
                 message = message,
                 packageName = sbn.packageName,
                 postedAt = sbn.postTime,
@@ -132,5 +155,6 @@ class NotiPrintNotificationListenerService : NotificationListenerService() {
 
     private companion object {
         const val TAG = "NotiPrintListener"
+        const val CALENDAR_DUPLICATE_WINDOW_MS = 60_000L
     }
 }
