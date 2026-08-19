@@ -1,1 +1,2 @@
-# NotiPrint has no project-specific shrinking rules yet.
+# AndroidX, Room, WorkManager, and Compose ship the consumer rules needed by
+# NotiPrint. Keep this file for future app-specific reflection entry points.

@@ -45,13 +45,33 @@ After a successful build, the APK is available at:
 app/build/outputs/apk/debug/app-debug.apk
 ```
 
+Build the optimized, non-debuggable APK with R8 and resource shrinking enabled:
+
+```powershell
+.\gradlew.bat assembleRelease
+```
+
+```bash
+./gradlew assembleRelease
+```
+
+The resulting APK is available at:
+
+```text
+app/build/outputs/apk/release/app-release.apk
+```
+
+The local release APK uses the standard debug certificate so it can be installed
+over previous debug builds. Configure a separate private release signing key
+before distributing the app through a store.
+
 Use `--offline` only when the required Gradle dependencies have already been cached locally.
 
 ## Install and first run
 
 For development, connect a phone with USB debugging enabled, select it in Android Studio, and press **Run**.
 
-To install the APK on a regular phone, copy `app-debug.apk` to the phone, open it with the file manager, and allow installation from that source when Android asks. USB debugging is not required for this method.
+For a regular installation, copy `app-release.apk` to the phone, open it with the file manager, and allow installation from that source when Android asks. Use the debug APK for development and diagnostics. USB debugging is not required for manual installation.
 
 On first launch:
 

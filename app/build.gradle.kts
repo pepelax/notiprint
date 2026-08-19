@@ -24,6 +24,24 @@ android {
         buildConfigField("String", "BUILD_DATE", "\"$buildDate\"")
     }
 
+    buildTypes {
+        getByName("release") {
+            isDebuggable = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+
+            // Keep local release APKs upgrade-compatible with the debug builds
+            // already installed on the target phones. A store distribution
+            // must replace this with a private release signing configuration.
+            signingConfig = signingConfigs.getByName("debug")
+
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+        }
+    }
+
     buildFeatures {
         compose = true
         buildConfig = true
